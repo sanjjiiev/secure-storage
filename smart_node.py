@@ -2,98 +2,67 @@ import socket
 import threading
 import os
 import requests
-import miniupnpc
 
-# CONFIGURATION
-DISCOVERY_SERVER_URL = "http://10.230.2.217:8000" # <--- REPLACE with Discovery Server IP!
-PORT = 5001
+# --- HARDCODED CONFIGURATION ---
+DISCOVERY_SERVER_URL = "https://ss-server-5v34.onrender.com"
 STORAGE_DIR = "node_storage"
+PORT = 25565 # The local port matching Playit
 
-def setup_upnp(port_no):
-    """Attempts to forward ports using UPnP"""
-    print(f"[*] Attempting UPnP Port Forwarding for port {port_no}...")
-    try:
-        upnp = miniupnpc.UPnP()
-        upnp.discoverdelay = 200
-        upnp.discover()
-        upnp.selectigd()
-        
-        # Get External IP
-        external_ip = upnp.externalipaddress()
-        
-        # Add Port Mapping (External -> Internal)
-        upnp.addportmapping(port_no, 'TCP', upnp.lanaddr, port_no, 'BlockDrive Node', '')
-        print(f"[SUCCESS] UPnP Active! External IP: {external_ip}")
-        return external_ip
-    except Exception as e:
-        print(f"[-] UPnP Failed: {e}. Assuming Local Network.")
-        return None
+# Your specific Playit Tunnel Address
+HARDCODED_PUBLIC_HOST = "housing-obligations.gl.joinmc.link"
+HARDCODED_PUBLIC_PORT = 25565
 
-def register_with_discovery(public_ip, port):
-    """Tells the Discovery Server we are alive"""
-    if not public_ip:
-        # Fallback to local IP if UPnP failed
-        public_ip = socket.gethostbyname(socket.gethostname())
-        
+def register_with_discovery():
+    """
+    Automatically registers the node using the hardcoded Playit tunnel.
+    """
     try:
-        payload = {"ip": public_ip, "port": port}
+        # We send the public tunnel address so others can reach this node
+        payload = {
+            "ip": HARDCODED_PUBLIC_HOST, 
+            "port": HARDCODED_PUBLIC_PORT
+        }
         requests.post(f"{DISCOVERY_SERVER_URL}/register", json=payload)
-        print("[+] Registered with Discovery Server.")
+        print(f"[+] Automatic Registration Successful: {HARDCODED_PUBLIC_HOST}:{HARDCODED_PUBLIC_PORT}")
     except Exception as e:
-        print(f"[-] Could not contact Discovery Server: {e}")
+        print(f"[-] Auto-Registration failed: {e}")
 
 def handle_client(conn, addr):
-    print(f"[+] Connection from {addr}")
     try:
-        # Read the request
         request = conn.recv(1024).decode()
-        
-        # CASE 1: DOWNLOAD REQUEST ("GET:filename")
         if request.startswith("GET:"):
             filename = request.split(":")[1]
             path = os.path.join(STORAGE_DIR, filename)
             if os.path.exists(path):
                 with open(path, "rb") as f:
                     conn.sendall(f.read())
-                print(f"[+] Sent {filename} to {addr}")
-            else:
-                conn.close()
-
-        # CASE 2: UPLOAD REQUEST (Just the filename)
         else:
-            conn.send(b"ACK") # Send Acknowledgement
+            conn.send(b"ACK")
             path = os.path.join(STORAGE_DIR, request)
             with open(path, "wb") as f:
                 while True:
                     data = conn.recv(4096)
                     if not data: break
                     f.write(data)
-            print(f"[+] Stored chunk: {request}")
-            
-    except Exception as e:
-        print(f"[-] Error: {e}")
     finally:
         conn.close()
-        
-def start_node():
-    if not os.path.exists(STORAGE_DIR): os.makedirs(STORAGE_DIR)
-    
-    # 1. Setup Networking
-    public_ip = setup_upnp(PORT)
-    
-    # 2. Register Presence
-    register_with_discovery(public_ip, PORT)
-    
-    # 3. Start Server
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.bind(('0.0.0.0', PORT))
-    server.listen(5)
-    print(f"[*] Node listening on Port {PORT}...")
-    
-    while True:
-        conn, addr = server.accept()
-        thread = threading.Thread(target=handle_client, args=(conn, addr))
-        thread.start()
 
-if __name__ == "__main__":
-    start_node()
+def start_node():
+    if not os.path.exists(STORAGE_DIR): 
+        os.makedirs(STORAGE_DIR)
+    
+    # Trigger the automatic registration
+    register_with_discovery()
+    
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        server.bind(('0.0.0.0', PORT))
+        server.listen(5)
+        print(f"[*] Background Node Active on Port {PORT}")
+        while True:
+            conn, addr = server.accept()
+            threading.Thread(target=handle_client, args=(conn, addr)).start()
+    except Exception as e:
+        # This prevents crashing if the user refreshes Streamlit
+        print(f"[*] Node already running or port bound.")

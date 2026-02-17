@@ -1,43 +1,32 @@
 import streamlit as st
 import threading
-import smart_node  # Import your node script
+import smart_node
 import requests
 import socket
-import os
 import file_handler
-import time
 
 # --- CONFIGURATION ---
-# The Tracker (Phonebook) still runs on one stable PC (or cloud)
-DISCOVERY_SERVER = "http://192.168.1.10:8000"  # <--- UPDATE THIS IP
+DISCOVERY_SERVER = "https://ss-server-5v34.onrender.com"
 
-# --- 1. AUTO-START STORAGE NODE (BACKGROUND) ---
-# We use Streamlit's session state to ensure the node only starts ONCE
+# --- 1. AUTO-START LOGIC ---
 if "node_running" not in st.session_state:
     st.session_state["node_running"] = True
-    
-    # Run smart_node.start_node() in a separate thread
-    # This ensures the GUI doesn't freeze while the node listens for files
+    # Start the hardcoded node automatically
     node_thread = threading.Thread(target=smart_node.start_node, daemon=True)
     node_thread.start()
-    print("[*] Background Storage Node Started!")
 
-# --- 2. CLIENT FUNCTIONS (For the UI) ---
+# --- 2. CLIENT HELPER FUNCTIONS ---
 def get_peers():
     try:
         response = requests.get(f"{DISCOVERY_SERVER}/get_nodes")
-        if response.status_code == 200:
-            nodes = response.json()
-            # Filter out myself! (Don't upload to localhost if possible)
-            # For this demo, we keep everyone.
-            return nodes
+        return response.json() if response.status_code == 200 else []
     except:
         return []
 
 def upload_chunk(ip, port, data, filename):
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(2) # Short timeout
+        s.settimeout(5)
         s.connect((ip, int(port)))
         s.send(filename.encode())
         if s.recv(1024) != b"ACK": return False
@@ -47,88 +36,102 @@ def upload_chunk(ip, port, data, filename):
     except:
         return False
 
-def record_transaction(owner, file_hash, filename, locations):
-    payload = {"owner": owner, "file_hash": file_hash, "file_name": filename, "locations": locations}
+def download_chunk(ip, port, filename):
     try:
-        requests.post(f"{DISCOVERY_SERVER}/add_transaction", json=payload)
-        return True
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(5)
+        s.connect((ip, int(port)))
+        s.send(f"GET:{filename}".encode())
+        data = b""
+        while True:
+            chunk = s.recv(4096)
+            if not chunk: break
+            data += chunk
+        s.close()
+        return data
     except:
-        return False
+        return None
 
-# --- 3. THE USER INTERFACE (Frontend) ---
+# --- 3. STREAMLIT UI ---
 st.set_page_config(page_title="BlockDrive P2P", layout="wide")
+st.title("🌐 BlockDrive: Automated P2P Storage")
+st.caption("✅ Background Node Active. You are currently a storage provider.")
 
-st.title("🌐 BlockDrive: P2P Secure Storage")
-st.caption(f"✅ You are a Node! Contributing storage to the network.")
-
-# Sidebar Stats
-st.sidebar.header("Network Status")
+# Sidebar status
 peers = get_peers()
 st.sidebar.metric("Active Peers", len(peers))
-st.sidebar.text("Tracker: Online" if peers else "Tracker: Offline")
+if st.sidebar.button("Refresh Network"):
+    st.rerun()
 
-# Tabs for cleanliness
 tab1, tab2, tab3 = st.tabs(["📤 Upload", "📥 Download", "🔗 Blockchain"])
 
 with tab1:
-    st.header("Upload to the Mesh")
-    uploaded_file = st.file_uploader("Select a file")
+    st.header("Upload File to Network")
+    uploaded_file = st.file_uploader("Choose a file")
     
-    if uploaded_file and st.button("Distribute File"):
+    if uploaded_file and st.button("Distribute Encrypted Chunks"):
         handler = file_handler.FileHandler()
+        file_bytes = uploaded_file.getvalue()
         
-        # A. Encrypt
-        with st.spinner("Encrypting..."):
-            file_bytes = uploaded_file.getvalue()
-            key = handler.generate_key()
-            f_fernet = file_handler.Fernet(key)
-            encrypted_data = f_fernet.encrypt(file_bytes)
+        # Encrypt
+        key = handler.generate_key()
+        f = file_handler.Fernet(key)
+        encrypted_data = f.encrypt(file_bytes)
         
-        # B. Split
-        chunk_size = 1024 * 1024 # 1MB
+        # Split (1MB chunks)
+        chunk_size = 1024 * 1024
         chunks = [encrypted_data[i:i+chunk_size] for i in range(0, len(encrypted_data), chunk_size)]
         
-        # C. Distribute
         if not peers:
-            st.error("No peers found! You are the only one online.")
+            st.error("No other nodes detected on the network.")
         else:
-            progress_bar = st.progress(0)
             location_map = {}
-            
+            progress = st.progress(0)
             for i, chunk_data in enumerate(chunks):
-                # Pick a random peer or round-robin
                 peer = peers[i % len(peers)]
-                ip, port = peer.split(":")
+                p_ip, p_port = peer.split(":")
+                c_name = f"{uploaded_file.name}.part_{i}"
                 
-                chunk_name = f"{uploaded_file.name}.part_{i}"
-                if upload_chunk(ip, port, chunk_data, chunk_name):
-                    location_map[chunk_name] = ip
-                progress_bar.progress((i + 1) / len(chunks))
+                if upload_chunk(p_ip, p_port, chunk_data, c_name):
+                    location_map[c_name] = p_ip
+                progress.progress((i+1)/len(chunks))
             
-            # D. Record
-            if location_map:
-                merkle_root = handler.build_merkle_tree(chunks)
-                record_transaction("User_Me", merkle_root, uploaded_file.name, location_map)
-                st.success("File Distributed Successfully!")
-                st.info(f"File ID: {merkle_root}")
-                st.warning(f"Key: {key.decode()}")
+            # Record to Blockchain (Render)
+            root = handler.build_merkle_tree(chunks)
+            payload = {
+                "owner": "User_Me", 
+                "file_hash": root, 
+                "file_name": uploaded_file.name, 
+                "locations": location_map
+            }
+            requests.post(f"{DISCOVERY_SERVER}/add_transaction", json=payload)
+            
+            st.success(f"File ID: {root}")
+            st.warning(f"Decryption Key: {key.decode()}")
 
 with tab2:
-    st.header("Retrieve File")
-    file_id = st.text_input("Enter File ID")
-    dec_key = st.text_input("Enter Key")
+    st.header("Retrieve & Reassemble")
+    f_id = st.text_input("File ID")
+    f_key = st.text_input("Key")
+    
     if st.button("Download"):
-        st.info("Fetching metadata from Blockchain...")
-        # (Add download logic here matching previous steps)
-        # 1. Get Locations from Tracker
-        # 2. Connect to Peer IPs
-        # 3. Decrypt
-        st.write("Searching network...")
+        resp = requests.get(f"{DISCOVERY_SERVER}/get_file/{f_id}")
+        if resp.status_code == 200:
+            meta = resp.json()
+            locs = meta['locations']
+            full_data = b""
+            for c_name in sorted(locs.keys()):
+                data = download_chunk(locs[c_name], 25565, c_name)
+                if data: full_data += data
+            
+            try:
+                f = file_handler.Fernet(f_key.encode())
+                decrypted = f.decrypt(full_data)
+                st.download_button("Download Original", decrypted, file_name=meta['file_name'])
+            except:
+                st.error("Invalid Key")
 
 with tab3:
-    if st.button("Refresh Chain"):
-        try:
-            chain = requests.get(f"{DISCOVERY_SERVER}/chain").json()
-            st.json(chain)
-        except:
-            st.error("Tracker unavailable")
+    if st.button("View Ledger"):
+        chain_data = requests.get(f"{DISCOVERY_SERVER}/chain").json()
+        st.json(chain_data)
