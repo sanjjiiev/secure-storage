@@ -43,26 +43,38 @@ def register_with_discovery(public_ip, port):
         print(f"[-] Could not contact Discovery Server: {e}")
 
 def handle_client(conn, addr):
-    """Receives a file chunk"""
     print(f"[+] Connection from {addr}")
     try:
-        # 1. Read Filename
-        file_name = conn.recv(1024).decode()
-        conn.send(b"ACK") # Send Acknowledgement
+        # Read the request
+        request = conn.recv(1024).decode()
+        
+        # CASE 1: DOWNLOAD REQUEST ("GET:filename")
+        if request.startswith("GET:"):
+            filename = request.split(":")[1]
+            path = os.path.join(STORAGE_DIR, filename)
+            if os.path.exists(path):
+                with open(path, "rb") as f:
+                    conn.sendall(f.read())
+                print(f"[+] Sent {filename} to {addr}")
+            else:
+                conn.close()
 
-        # 2. Save File
-        path = os.path.join(STORAGE_DIR, file_name)
-        with open(path, "wb") as f:
-            while True:
-                data = conn.recv(4096)
-                if not data: break
-                f.write(data)
-        print(f"[+] Stored chunk: {file_name}")
+        # CASE 2: UPLOAD REQUEST (Just the filename)
+        else:
+            conn.send(b"ACK") # Send Acknowledgement
+            path = os.path.join(STORAGE_DIR, request)
+            with open(path, "wb") as f:
+                while True:
+                    data = conn.recv(4096)
+                    if not data: break
+                    f.write(data)
+            print(f"[+] Stored chunk: {request}")
+            
     except Exception as e:
-        print(f"[-] Error receiving: {e}")
+        print(f"[-] Error: {e}")
     finally:
         conn.close()
-
+        
 def start_node():
     if not os.path.exists(STORAGE_DIR): os.makedirs(STORAGE_DIR)
     
