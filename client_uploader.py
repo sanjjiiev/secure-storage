@@ -1,56 +1,59 @@
 import socket
 import os
+import time
 
-# CONFIGURATION
-HOST = '0.0.0.0'  # Listen on all network interfaces (WiFi, Ethernet)
-PORT = 5001       # The port this node listens on
-STORAGE_DIR = "node_storage"
+def send_chunk(target_ip, target_port, file_path):
+    """
+    Sends a single file to a specific Node (IP:Port).
+    """
+    if not os.path.exists(file_path):
+        print(f"[-] File {file_path} not found.")
+        return False
 
-# Create storage directory if not exists
-if not os.path.exists(STORAGE_DIR):
-    os.makedirs(STORAGE_DIR)
-
-def start_server():
-    # 1. Create a Socket (TCP/IP)
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    
-    # 2. Bind to the Port
-    server_socket.bind((HOST, PORT))
-    
-    # 3. Start Listening (Queue up to 5 connections)
-    server_socket.listen(5)
-    print(f"[*] Node Started. Listening on {HOST}:{PORT}...")
-    print(f"[*] storage_dir: {STORAGE_DIR}")
-
-    while True:
-        # 4. Accept Incoming Connection
-        client_socket, addr = server_socket.accept()
-        print(f"[+] Connection from {addr}")
+    try:
+        print(f"[*] Connecting to {target_ip}:{target_port}...")
         
-        # 5. Handle the File Transfer
-        try:
-            # First, receive the file name (e.g., "chunk_0.dat")
-            file_name = client_socket.recv(1024).decode()
+        # 1. Create Socket & Connect
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(5) # 5 second timeout if node is dead
+        s.connect((target_ip, target_port))
+        
+        # 2. Send Filename first
+        filename = os.path.basename(file_path)
+        s.send(filename.encode())
+        
+        # 3. Wait for "ACK" (Acknowledgement)
+        ack = s.recv(1024)
+        if ack != b"ACK":
+            print("[-] Server did not acknowledge filename.")
+            return False
             
-            # Send acknowledgement ("OK, send the data")
-            client_socket.send(b"ACK")
-            
-            # Open file to write
-            file_path = os.path.join(STORAGE_DIR, file_name)
-            with open(file_path, "wb") as f:
-                while True:
-                    # Receive 1KB at a time
-                    data = client_socket.recv(1024)
-                    if not data:
-                        break
-                    f.write(data)
-            
-            print(f"[+] Saved: {file_name}")
-            
-        except Exception as e:
-            print(f"[-] Error: {e}")
-        finally:
-            client_socket.close()
+        # 4. Send File Data
+        with open(file_path, "rb") as f:
+            while True:
+                data = f.read(1024)
+                if not data:
+                    break
+                s.send(data)
+        
+        print(f"[+] Uploaded {filename} to {target_ip}")
+        s.close()
+        return True
 
+    except Exception as e:
+        print(f"[-] Failed to send to {target_ip}: {e}")
+        return False
+
+# --- TEST SCENARIO ---
 if __name__ == "__main__":
-    start_server()
+    # 1. Create a dummy chunk to send (Simulation)
+    with open("chunk_test.dat", "w") as f:
+        f.write("This is a distributed file chunk data " * 100)
+    
+    # 2. Define Target (Where is the storage node?)
+    # IF TESTING ON SAME LAPTOP: Use '127.0.0.1' (Localhost)
+    # IF TESTING ON 2 LAPTOPS: Use the IP of Laptop B (e.g., '192.168.1.5')
+    TARGET_IP = '172.16.24.173' 
+    TARGET_PORT = 5001
+    
+    send_chunk(TARGET_IP, TARGET_PORT, "chunk_test.dat")
