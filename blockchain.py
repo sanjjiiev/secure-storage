@@ -1,6 +1,6 @@
+import hashlib
 import json
 import time
-import hashlib
 
 class Blockchain:
     def __init__(self):
@@ -28,10 +28,6 @@ class Blockchain:
     def new_transaction(self, owner, file_hash, file_name, chunks_metadata):
         """
         Creates a new transaction to go into the next Mined Block
-        :param owner: Sender's Address (User ID)
-        :param file_hash: The Merkle Root (File ID)
-        :param file_name: Original filename
-        :param chunks_metadata: Dictionary { "chunk_0": "192.168.1.5", "chunk_1": "192.168.1.6" }
         """
         self.current_transactions.append({
             'owner': owner,
@@ -58,21 +54,3 @@ class Blockchain:
                 if tx['file_hash'] == file_hash:
                     return tx
         return None
-
-# --- TESTING IT ---
-if __name__ == "__main__":
-    blockchain = Blockchain()
-    
-    # Simulate adding a file
-    blockchain.new_transaction(
-        owner="User_A",
-        file_hash="abc123merkleRoot",
-        file_name="secret.pdf",
-        chunks_metadata={"chunk_0": "192.168.1.5", "chunk_1": "192.168.1.6"}
-    )
-    
-    # Mine a block (Save it)
-    blockchain.new_block(proof=12345)
-    
-    print("Blockchain Content:")
-    print(json.dumps(blockchain.chain, indent=4))
