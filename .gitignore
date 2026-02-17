@@ -1,3 +1,4 @@
 /__pycache__
 secret.key
 /node_storage
+local_chain.json
