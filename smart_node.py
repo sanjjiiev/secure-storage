@@ -2,6 +2,7 @@ import requests
 import time
 import os
 import uuid
+import json
 import sys
 
 # ─────────────────────────────────────────────
@@ -97,10 +98,50 @@ def process_tasks():
     except Exception as e:
         print(f"[-] Error polling: {e}")
 
+# ─────────────────────────────────────────────
+# BLOCKCHAIN SYNC (Decentralization)
+# ─────────────────────────────────────────────
+LOCAL_CHAIN_FILE = "local_chain.json"
+
+def sync_blockchain():
+    """Fetch and validate the blockchain from the backend.
+    Each node keeps a local verified copy for decentralization."""
+    try:
+        r = requests.get(f"{HF_SPACE_URL}/api/chain", timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            chain = data.get("chain", [])
+            
+            # Validate chain integrity locally
+            v = requests.get(f"{HF_SPACE_URL}/api/validate", timeout=10)
+            if v.status_code == 200:
+                result = v.json()
+                if result.get("valid"):
+                    # Save verified chain locally
+                    with open(LOCAL_CHAIN_FILE, "w") as f:
+                        json.dump({"chain": chain, "synced_at": time.time()}, f, indent=2)
+                    print(f"🔗 Chain synced & verified ({len(chain)} blocks)")
+                else:
+                    print(f"⚠️ WARNING: Backend chain TAMPERED at block {result.get('tampered_at')}!")
+    except Exception as e:
+        print(f"[-] Chain sync failed: {e}")
+
+# ─────────────────────────────────────────────
+# MAIN LOOP
+# ─────────────────────────────────────────────
+SYNC_INTERVAL = 12  # Sync chain every 12 polls (~60s)
+
 def main():
+    poll_count = 0
     while True:
         register()
         process_tasks()
+        
+        # Sync blockchain periodically
+        poll_count += 1
+        if poll_count % SYNC_INTERVAL == 0:
+            sync_blockchain()
+        
         time.sleep(5) # Poll every 5 seconds
 
 if __name__ == "__main__":
