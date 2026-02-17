@@ -1,0 +1,12 @@
+{
+  "chain": [
+    {
+      "index": 1,
+      "timestamp": 1771348287.2784374,
+      "transactions": [],
+      "proof": 563,
+      "previous_hash": "1"
+    }
+  ],
+  "synced_at": 1771348968.3034158
+}
