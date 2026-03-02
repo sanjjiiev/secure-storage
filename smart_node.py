@@ -105,28 +105,63 @@ import zlib
 
 LOCAL_CHAIN_FILE = "local_chain.bin"
 
+def load_local_chain():
+    """Load our local chain copy (binary or legacy JSON)."""
+    if os.path.exists(LOCAL_CHAIN_FILE):
+        try:
+            with open(LOCAL_CHAIN_FILE, "rb") as f:
+                raw = zlib.decompress(f.read()).decode('utf-8')
+                return json.loads(raw).get("chain", [])
+        except:
+            pass
+    # Try legacy JSON
+    if os.path.exists("local_chain.json"):
+        try:
+            with open("local_chain.json", "r") as f:
+                return json.load(f).get("chain", [])
+        except:
+            pass
+    return []
+
 def sync_blockchain():
-    """Fetch and validate the blockchain from the backend.
-    Each node keeps a local verified copy as compressed binary."""
+    """Sync blockchain with backend. If our local chain is longer, push it back."""
     try:
         r = requests.get(f"{HF_SPACE_URL}/api/chain", timeout=10)
         if r.status_code == 200:
             data = r.json()
-            chain = data.get("chain", [])
+            server_chain = data.get("chain", [])
+            local_chain = load_local_chain()
             
-            # Validate chain integrity locally
+            # If our local chain is LONGER → push it to recover backend
+            if len(local_chain) > len(server_chain):
+                print(f"🔄 Backend has {len(server_chain)} blocks, we have {len(local_chain)}. Pushing recovery...")
+                try:
+                    resp = requests.post(
+                        f"{HF_SPACE_URL}/api/sync_chain",
+                        json={"chain": local_chain},
+                        timeout=30
+                    )
+                    if resp.status_code == 200:
+                        result = resp.json()
+                        if result.get("status") == "adopted":
+                            print(f"✅ Backend recovered! Now has {result.get('new_length')} blocks")
+                        else:
+                            print(f"ℹ️ Backend rejected: {result.get('reason')}")
+                except Exception as e:
+                    print(f"[-] Recovery push failed: {e}")
+                return
+            
+            # Normal sync: server chain is longer or equal → save locally
             v = requests.get(f"{HF_SPACE_URL}/api/validate", timeout=10)
             if v.status_code == 200:
                 result = v.json()
                 if result.get("valid"):
-                    # Save verified chain locally as compressed binary
-                    raw = json.dumps({"chain": chain, "synced_at": time.time()}).encode('utf-8')
+                    raw = json.dumps({"chain": server_chain, "synced_at": time.time()}).encode('utf-8')
                     with open(LOCAL_CHAIN_FILE, "wb") as f:
                         f.write(zlib.compress(raw, level=9))
-                    # Cleanup old JSON if exists
                     if os.path.exists("local_chain.json"):
                         os.remove("local_chain.json")
-                    print(f"🔗 Chain synced & verified ({len(chain)} blocks) [binary]")
+                    print(f"🔗 Chain synced & verified ({len(server_chain)} blocks) [binary]")
                 else:
                     print(f"⚠️ WARNING: Backend chain TAMPERED at block {result.get('tampered_at')}!")
     except Exception as e:
