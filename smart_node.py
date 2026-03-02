@@ -101,11 +101,13 @@ def process_tasks():
 # ─────────────────────────────────────────────
 # BLOCKCHAIN SYNC (Decentralization)
 # ─────────────────────────────────────────────
-LOCAL_CHAIN_FILE = "local_chain.json"
+import zlib
+
+LOCAL_CHAIN_FILE = "local_chain.bin"
 
 def sync_blockchain():
     """Fetch and validate the blockchain from the backend.
-    Each node keeps a local verified copy for decentralization."""
+    Each node keeps a local verified copy as compressed binary."""
     try:
         r = requests.get(f"{HF_SPACE_URL}/api/chain", timeout=10)
         if r.status_code == 200:
@@ -117,10 +119,14 @@ def sync_blockchain():
             if v.status_code == 200:
                 result = v.json()
                 if result.get("valid"):
-                    # Save verified chain locally
-                    with open(LOCAL_CHAIN_FILE, "w") as f:
-                        json.dump({"chain": chain, "synced_at": time.time()}, f, indent=2)
-                    print(f"🔗 Chain synced & verified ({len(chain)} blocks)")
+                    # Save verified chain locally as compressed binary
+                    raw = json.dumps({"chain": chain, "synced_at": time.time()}).encode('utf-8')
+                    with open(LOCAL_CHAIN_FILE, "wb") as f:
+                        f.write(zlib.compress(raw, level=9))
+                    # Cleanup old JSON if exists
+                    if os.path.exists("local_chain.json"):
+                        os.remove("local_chain.json")
+                    print(f"🔗 Chain synced & verified ({len(chain)} blocks) [binary]")
                 else:
                     print(f"⚠️ WARNING: Backend chain TAMPERED at block {result.get('tampered_at')}!")
     except Exception as e:
